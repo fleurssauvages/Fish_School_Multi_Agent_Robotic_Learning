@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import pickle
 
 # -----------------------------
-# Helper math (Numba-friendly)
+# Helpers
 # -----------------------------
 @njit(cache=True, fastmath=True)
 def _norm3(v0, v1, v2):
@@ -34,8 +34,6 @@ def _clamp_len(v0, v1, v2, max_len):
 
 @njit(cache=True, fastmath=True)
 def _lcg_rand01(seed_arr):
-    # linear congruential generator, matching JS constants:
-    # m = 2^32, a = 1664525, c = 1
     m = 4294967296.0
     a = 1664525.0
     c = 1.0
@@ -47,7 +45,7 @@ def _lcg_rand01(seed_arr):
 
 @njit(cache=True, fastmath=True)
 def _cubic_interpolate(v0, v1, v2, v3, x):
-    # Paul Breeuwsma coefficients (same as JS)
+    # Paul Breeuwsma coefficients
     x2 = x * x
     a0 = -0.5 * v0 + 1.5 * v1 - 1.5 * v2 + 0.5 * v3
     a1 = v0 - 2.5 * v1 + 2.0 * v2 - 0.5 * v3
@@ -60,7 +58,7 @@ def _cubic_interpolate(v0, v1, v2, v3, x):
 def _noise(time, cum_wavlen, rv0, rv1, rv2, rv3, seed_arr):
     wavelen = 0.3
     if time >= cum_wavlen:
-        # advance one wavelen segment
+        # Wavelen segment
         cum_wavlen = cum_wavlen + wavelen
         rv0, rv1, rv2 = rv1, rv2, rv3
         rv3 = _lcg_rand01(seed_arr)
@@ -71,7 +69,7 @@ def _noise(time, cum_wavlen, rv0, rv1, rv2, rv3, seed_arr):
 
 
 # -----------------------------
-# Core rules (Numba)
+# Core rules
 # -----------------------------
 @njit(cache=True, fastmath=True)
 def _bounds_steer(px, py, pz, bound_size):
@@ -96,7 +94,7 @@ def _bounds_steer(px, py, pz, bound_size):
     elif pz > max_b:
         sz = max_b - pz
 
-    sy = sy * 2.0  # matches JS
+    sy = sy * 2.0 
     return sx, sy, sz
 
 @njit(cache=True, fastmath=True)
@@ -205,7 +203,7 @@ def _predator_avoid(i, pos, predators_pos, pred_count, avoid_r):
 def _velocity_attack_step(pred_i, predators_pos, predators_vel, pred_own_time,
                           pred_rest, pred_rest_start, pred_attack_start, pred_prey_idx,
                           boid_pos, boid_count, dt):
-    rest_time = 50 * dt
+    rest_time = 5 * dt
     attack_time = 100 * dt
 
     t = pred_own_time[pred_i]
@@ -259,12 +257,16 @@ def _velocity_attack_step(pred_i, predators_pos, predators_vel, pred_own_time,
     uy -= vy
     uz -= vz
 
-    s = speed_up_time ** 8
+    tau = attack_time * 0.3
+    s = speed_up_time / (speed_up_time + tau)
     ux *= s
     uy *= s
     uz *= s
 
-    ux, uy, uz = _clamp_len(ux, uy, uz, 0.01)
+    max_speed = 0.01
+    dt_ref = 0.01
+    max_speed_dt = max_speed * (dt / dt_ref)
+    ux, uy, uz = _clamp_len(ux, uy, uz, max_speed_dt)
     return ux, uy, uz
 
 
@@ -303,17 +305,13 @@ def step_sim(
     goal_z,
     obs_centers
 ):
-    """One simulation step (Numba).
+    """One simulation step.
     """
-
-    play_delta = dt * 100.0
-    if play_delta > 1000.0:
-        play_delta = 30.0
 
     if (max_speed == 0.0 and max_speed_p == 0.0) or boid_count <= 0:
         return
 
-    # --- boids ---
+    # --- Boids ---
     for i in prange(boid_count):
         boid_time[i] += dt
 
@@ -343,7 +341,7 @@ def step_sim(
 
         # random motion (smooth noise)
         if rand_s != 0.0:
-            t = boid_time[i] * rand_wavelen_scalar
+            t = boid_time[i] * rand_wavelen_scalar * math.sqrt(dt)
 
             rv0, rv1, rv2, rv3 = boid_noise_vals[i, 0, 0], boid_noise_vals[i, 0, 1], boid_noise_vals[i, 0, 2], boid_noise_vals[i, 0, 3]
             nx, cwl, rv0, rv1, rv2, rv3 = _noise(t + 0.0, boid_noise_cum[i, 0], rv0, rv1, rv2, rv3, seed_arr)
@@ -371,7 +369,7 @@ def step_sim(
             ay += sy * pred_avoid_s
             az += sz * pred_avoid_s
 
-        # obstacle avoid (variable obstacles)
+        # obstacle avoid
         if obs_avoid_s != 0.0 and obs_centers.shape[0] > 0:
             for o in range(obs_centers.shape[0]):
                 cx = obs_centers[o, 0]
@@ -401,44 +399,43 @@ def step_sim(
             az += (dz / d) * mag
 
         # integrate
-        ax *= play_delta * rule_scalar * 0.005
-        ay *= play_delta * rule_scalar * 0.005
-        az *= play_delta * rule_scalar * 0.005
-        ay *= 0.8
+        ax *= rule_scalar
+        ay *= rule_scalar
+        az *= rule_scalar
 
-        boid_vel[i, 0] += ax
-        boid_vel[i, 1] += ay
-        boid_vel[i, 2] += az
+        boid_vel[i, 0] += ax * dt
+        boid_vel[i, 1] += ay * dt
+        boid_vel[i, 2] += az * dt
         boid_vel[i, 0], boid_vel[i, 1], boid_vel[i, 2] = _clamp_len(
             boid_vel[i, 0], boid_vel[i, 1], boid_vel[i, 2], max_speed
         )
 
-        boid_pos[i, 0] += boid_vel[i, 0] * play_delta
-        boid_pos[i, 1] += boid_vel[i, 1] * play_delta
-        boid_pos[i, 2] += boid_vel[i, 2] * play_delta
+        boid_pos[i, 0] += boid_vel[i, 0] * dt
+        boid_pos[i, 1] += boid_vel[i, 1] * dt
+        boid_pos[i, 2] += boid_vel[i, 2] * dt
 
-    # --- predators ---
+    # --- Predators ---
     for i in range(pred_count):
         pred_time[i] += dt
 
         ax = ay = az = 0.0
 
-        # predators keep only separation from each other (as in original)
+        # Predators have fixed Reynolds rules
         sep0, sep1, sep2, _, _, _, _, _, _ = _reynolds(
-            i, pred_pos, pred_vel, pred_count, sep_r, ali_r, coh_r
+            i, pred_pos, pred_vel, pred_count, 1.0, 1.0, 1.0
         )
-        ax += sep0 * sep_s
-        ay += sep1 * sep_s
-        az += sep2 * sep_s
+        ax += sep0 * 1.0
+        ay += sep1 * 1.0
+        az += sep2 * 1.0
 
         sx, sy, sz = _bounds_steer(pred_pos[i, 0], pred_pos[i, 1], pred_pos[i, 2], bound_size)
         ax += sx * (bnd_s / 1.5)
         ay += sy * (bnd_s / 1.5)
         az += sz * (bnd_s / 1.5)
 
-        # predators random motion
+        # Predators random motion
         if rand_s != 0.0:
-            t = pred_time[i] * rand_wavelen_scalar
+            t = pred_time[i] * rand_wavelen_scalar * math.sqrt(dt)
             rv0, rv1, rv2, rv3 = pred_noise_vals[i, 0, 0], pred_noise_vals[i, 0, 1], pred_noise_vals[i, 0, 2], pred_noise_vals[i, 0, 3]
             nx, cwl, rv0, rv1, rv2, rv3 = _noise(t + 0.0, pred_noise_cum[i, 0], rv0, rv1, rv2, rv3, seed_arr)
             pred_noise_cum[i, 0] = cwl
@@ -454,9 +451,9 @@ def step_sim(
             pred_noise_cum[i, 2] = cwl
             pred_noise_vals[i, 2, 0], pred_noise_vals[i, 2, 1], pred_noise_vals[i, 2, 2], pred_noise_vals[i, 2, 3] = rv0, rv1, rv2, rv3
 
-            ax += nx * (rand_s / 2.0)
-            ay += (ny * 0.2) * (rand_s / 2.0)
-            az += nz * (rand_s / 2.0)
+            ax += nx * (1.0 / 2.0)
+            ay += ny * (1.0 / 2.0)
+            az += nz * (1.0 / 2.0)
 
         if obs_centers.shape[0] > 0 and obs_avoid_s != 0.0:
             for o in range(obs_centers.shape[0]):
@@ -467,47 +464,46 @@ def step_sim(
                     pred_pos[i, 0], pred_pos[i, 1], pred_pos[i, 2],
                     cx, cy, cz, obs_radius, obs_avoid_r
                 )
-                ax += sx * obs_avoid_s
-                ay += sy * obs_avoid_s
-                az += sz * obs_avoid_s
+                ax += sx * 1.0
+                ay += sy * 1.0
+                az += sz * 1.0
 
         # The goal is an obstacle for predators
         sx, sy, sz = _obstacle_avoid(
             pred_pos[i, 0], pred_pos[i, 1], pred_pos[i, 2],
-            goal_x, goal_y, goal_z, obs_radius, obs_avoid_r
+            goal_x, goal_y, goal_z, 1.0, obs_avoid_r
         )
-        ax += sx * obs_avoid_s
-        ay += sy * obs_avoid_s
-        az += sz * obs_avoid_s
+        ax += sx * 1.0
+        ay += sy * 1.0
+        az += sz * 1.0
 
-        # attack behavior (keep existing state machine)
+        # Attack behavior
         vx, vy, vz = _velocity_attack_step(
             i, pred_pos, pred_vel, pred_time,
             pred_rest, pred_rest_start, pred_attack_start, pred_prey_idx,
             boid_pos, boid_count, dt
         )
-        vx *= play_delta * (attack_s * 2.0)
-        vy *= play_delta * (attack_s * 2.0)
-        vz *= play_delta * (attack_s * 2.0)
-        pred_vel[i, 0] += vx
-        pred_vel[i, 1] += vy
-        pred_vel[i, 2] += vz
+        vx *= (attack_s * 0.5)
+        vy *= (attack_s * 0.5)
+        vz *= (attack_s * 0.5)
+        pred_vel[i, 0] += vx * dt
+        pred_vel[i, 1] += vy * dt
+        pred_vel[i, 2] += vz * dt
 
-        ax *= play_delta * rule_scalar_p * 0.005
-        ay *= play_delta * rule_scalar_p * 0.005
-        az *= play_delta * rule_scalar_p * 0.005
-        ay *= 0.8
+        ax *= rule_scalar_p
+        ay *= rule_scalar_p
+        az *= rule_scalar_p
 
-        pred_vel[i, 0] += ax
-        pred_vel[i, 1] += ay
-        pred_vel[i, 2] += az
+        pred_vel[i, 0] += ax * dt
+        pred_vel[i, 1] += ay * dt
+        pred_vel[i, 2] += az * dt
         pred_vel[i, 0], pred_vel[i, 1], pred_vel[i, 2] = _clamp_len(
             pred_vel[i, 0], pred_vel[i, 1], pred_vel[i, 2], max_speed_p
         )
 
-        pred_pos[i, 0] += pred_vel[i, 0] * play_delta
-        pred_pos[i, 1] += pred_vel[i, 1] * play_delta
-        pred_pos[i, 2] += pred_vel[i, 2] * play_delta
+        pred_pos[i, 0] += pred_vel[i, 0] * dt
+        pred_pos[i, 1] += pred_vel[i, 1] * dt
+        pred_pos[i, 2] += pred_vel[i, 2] * dt
 
 def _init_agents(total_boids, total_preds, start_xyz, start_spread, seed=0.1):
     sx, sy, sz = float(start_xyz[0]), float(start_xyz[1]), float(start_xyz[2])
@@ -572,13 +568,6 @@ def update_events_numba(
     step_idx, dt
 ):
     """
-    Numba version of:
-      - active mask + early break condition
-      - goal hit marking + t_reach
-      - predator capture marking + zeroing velocity
-
-    Updates arrays in-place.
-
     Returns:
       n_active_after  (int): number of boids still alive after updates
       n_new_goal      (int): number that reached goal this step
@@ -603,7 +592,6 @@ def update_events_numba(
         if not alive[i]:
             continue
         if reached[i] or eaten[i]:
-            # (shouldn't happen if you keep these consistent, but safe)
             continue
 
         # --- goal check ---
@@ -619,7 +607,7 @@ def update_events_numba(
             n_new_goal += 1
             continue
 
-        # --- predator capture check ---
+        # --- Predator capture check ---
         if pred_count > 0:
             captured = False
             for j in range(pred_count):
@@ -640,7 +628,7 @@ def update_events_numba(
                 n_new_eaten += 1
                 continue
 
-        # still alive and not reached/eaten
+        # Still alive and not reached/eaten
         n_active_after += 1
 
     return n_active_after, n_new_goal, n_new_eaten
@@ -652,7 +640,6 @@ def mean_time_to_goal(t_reach, reached):
     for i in range(t_reach.shape[0]):
         if reached[i]:
             v = t_reach[i]
-            # reached implies v is valid, but keep it robust:
             if not math.isnan(v):
                 s += v
                 c += 1
@@ -707,17 +694,13 @@ def heading_entropy(vel, alive_mask, n_az=12, n_el=6):
         vy /= sp
         vz /= sp
 
-        # azimuth in [-pi, pi]
         az = math.atan2(vy, vx)
-        # elevation in [-pi/2, pi/2]
-        # clamp for numeric safety
         if vz > 1.0:
             vz = 1.0
         elif vz < -1.0:
             vz = -1.0
         el = math.asin(vz)
 
-        # binning (match your python version)
         az_bin = int(math.floor((az + math.pi) * inv_two_pi * n_az))
         el_bin = int(math.floor((el + (math.pi / 2.0)) * inv_pi * n_el))
 
@@ -738,7 +721,6 @@ def heading_entropy(vel, alive_mask, n_az=12, n_el=6):
     if total == 0:
         return 0.0
 
-    # entropy
     H = 0.0
     inv_total = 1.0 / total
     for b in range(n_bins):
@@ -806,7 +788,7 @@ class FishGoalEnv(gym.Env):
         dt: float = 0.01,
         start_spread: float = 3.0,
         avoid_radius: float = 6.0,
-        eat_radius: float = 1.2,
+        eat_radius: float = 2.0,
         goal_radius: float = 2.0,
         seed: int = 0,
         # reward weights
@@ -823,19 +805,23 @@ class FishGoalEnv(gym.Env):
         ali_r: float = 4.0,
         coh_r: float = 5.5,
         pred_avoid_r: float = 6.0,
-        rand_wavelen_scalar: float = 1.0,
+        rand_wavelen_scalar: float = 0.01,
         attack_s: float = 1.0,
         doAnimation: bool = False,
+        returnTrajectory: bool = False,
+        start =  np.array([6.0, 20.0, 20.0], dtype=np.float32),
+        goal =  np.array([34.0, 20.0, 20.0], dtype=np.float32),
+        obs_centers =  np.array([[20.0, 20.0, 20.0],
+                                          [12.0, 28.0, 22.0],
+                                          [28.0, 14.0, 26.0]], dtype=np.float32),
+        obs_radius: float = 3.5,
     ):
         super().__init__()
 
-        self.start = np.array([6.0, 20.0, 20.0], dtype=np.float32)
-        self.goal = np.array([34.0, 20.0, 20.0], dtype=np.float32)
-        self.obs_centers = np.array([[20.0, 20.0, 20.0],
-                                          [12.0, 28.0, 22.0],
-                                          [28.0, 14.0, 26.0]], dtype=np.float32)
-        self.obs_count = 3
-        self.obs_radius = 3.5
+        self.start = start
+        self.goal = goal
+        self.obs_centers = obs_centers
+        self.obs_radius = obs_radius
 
         self.boid_count = int(boid_count)
         self.pred_count = int(pred_count)
@@ -849,7 +835,6 @@ class FishGoalEnv(gym.Env):
         self.eat_radius = float(eat_radius)
         self.goal_radius = float(goal_radius)
 
-        # ---- fixed sim parameters (no p[...] packing) ----
         self.rule_scalar = float(rule_scalar)
         self.rule_scalar_p = float(rule_scalar_p)
         self.max_speed = float(max_speed)
@@ -872,9 +857,6 @@ class FishGoalEnv(gym.Env):
         # Action: 9 scalars (sep, ali, coh, bnd, rand, pred_avoid, obs_avoid, goal_gain, obs_gain)
         self.action_space = spaces.Box(low=0.0, high=10.0, shape=(9,), dtype=np.float32)
 
-        # Observation: (unit vec start->goal, normalized dist, normalized counts)
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)
-
         self._last_obs: Optional[np.ndarray] = None
         self._episode_seed: Optional[int] = None
 
@@ -884,6 +866,10 @@ class FishGoalEnv(gym.Env):
         self._t_reach = np.empty((self.boid_count,), dtype=np.float32)
 
         self.doAnimation = doAnimation
+        self.returnTrajectory = returnTrajectory
+        if self.returnTrajectory:
+            self.trajectory_boid_pos = np.empty((self.max_steps, self.boid_count, 3), dtype=np.float32)
+            self.trajectory_boid_vel = np.empty((self.max_steps, self.boid_count, 3), dtype=np.float32)
         self._warmup()
 
     def _warmup(self):
@@ -946,7 +932,7 @@ class FishGoalEnv(gym.Env):
             self.pred_scatter = self.ax.scatter(pred_pos[:, 0],
                                     pred_pos[:, 1],
                                     pred_pos[:, 2],
-                                    s=20, marker="^", depthshade=False)
+                                    s=30, marker="^", depthshade=False, color="red")
 
             self.goal_scatter = self.ax.scatter([self.goal[0]], [self.goal[1]], [self.goal[2]],
                                     s=80, marker="*", depthshade=False)
@@ -1034,7 +1020,7 @@ class FishGoalEnv(gym.Env):
         if self.pred_count > 0:
             margin_p = max(1.0, 1.5 * self.eat_radius)
             pred_centers = _non_overlapping_centers(
-                rng, self.pred_count, self.bound, margin_p,
+                rng, self.pred_count, self.bound, self.bound / 10,
                 min_sep=2.0 * self.eat_radius,
                 avoid_points=(start, goal),
             )
@@ -1053,6 +1039,9 @@ class FishGoalEnv(gym.Env):
         self._reached.fill(False)
         self._eaten.fill(False)
         self._t_reach.fill(np.nan)
+
+        n_goal = 0
+        n_eaten = 0
 
         for step in range(self.max_steps):
             step_sim(
@@ -1096,6 +1085,8 @@ class FishGoalEnv(gym.Env):
                 goal, self.goal_radius, self.eat_radius,
                 step, self.dt
             )
+            n_goal += n_new_goal
+            n_eaten += n_new_eaten
             if n_active == 0:
                 break
 
@@ -1103,9 +1094,12 @@ class FishGoalEnv(gym.Env):
                 self.boid_scatter._offsets3d = (boid_pos[:, 0], boid_pos[:, 1], boid_pos[:, 2])
                 self.pred_scatter._offsets3d = (pred_pos[:, 0], pred_pos[:, 1], pred_pos[:, 2])
                 plt.draw()
-                plt.pause(self.dt)
+                plt.pause(0.001)
 
-        n_goal, n_eaten = count_reached_eaten(self._reached, self._eaten)
+            if self.returnTrajectory:
+                self.trajectory_boid_pos[step, :, :] = boid_pos
+                self.trajectory_boid_vel[step, :, :] = boid_vel
+
         frac_goal = n_goal / float(self.boid_count)
         frac_eaten = n_eaten / float(self.boid_count)
 
@@ -1130,10 +1124,15 @@ class FishGoalEnv(gym.Env):
             "steps_executed": step + 1 if self.max_steps > 0 else 0,
         }
 
+        if self.returnTrajectory:
+            info["trajectory_boid_pos"] = self.trajectory_boid_pos
+            info["trajectory_boid_vel"] = self.trajectory_boid_vel
+        else:
+            info["trajectory_boid_pos"] = None
         return metrics, info
 
 if __name__ == "__main__":
-    env = FishGoalEnv(boid_count=600, pred_count=4, max_steps=500, doAnimation = True)
+    env = FishGoalEnv(boid_count=600, pred_count=4, max_steps=500, dt=1, doAnimation = True, returnTrajectory = False)
     env.reset(seed=0)
     """
     Parameters order:
@@ -1168,6 +1167,5 @@ if __name__ == "__main__":
         obs, reward, terminated, truncated, info = env.step(action)
         env.reset(seed=0)
         t1 = time.time()
-        if not plt.fignum_exists(env.fig.number):
-            t.append(t1 - t0)
-    print(f"Average step time: {np.mean(t)*1000.0:.2f} ms")
+        t.append(t1 - t0)
+    print(f"Median step time: {np.median(t)*1000.0:.2f} ms")

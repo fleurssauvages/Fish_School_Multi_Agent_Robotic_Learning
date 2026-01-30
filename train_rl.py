@@ -1,39 +1,27 @@
-
 import numpy as np
 from RL.env import FishGoalEnv
 from RL.multiagent_power_rl import MultiAgentPowerRL
 import pickle
 import numpy as np
 
-def eval_theta(env: FishGoalEnv, theta: np.ndarray, seeds):
-    """Average return over multiple episodes for variance reduction."""
-    Rs = np.zeros((len(seeds), 4), dtype=np.float32)
-    for i, s in enumerate(seeds):
-        env.reset(seed=int(s))
-        _, R, _, _, _ = env.step(theta.astype(np.float32))
-        Rs[i] = R
-    return Rs
-
-def eval_reward(Rs, weights):
-    R = np.mean(Rs, axis=0)
-    return np.dot(R, weights)
-
 def main():
-    boid_count = 200
+    # --- Simulation Parameters ---
+    boid_count = 500
     pred_count = 4
     max_steps = 300
+    dt = 0.01
 
-    env = FishGoalEnv(
-        boid_count=boid_count,
-        pred_count=pred_count,
-        max_steps=max_steps,
-    )
-    n_agents = 12
-    iters = 5
-    rollouts_per_iter = 8
-    eval_episodes = 3
+    # --- RL Parameters ---
+    n_agents = 6
+    iters = 10
+    rollouts_per_iter = 4
+    eval_episodes = 2
     seed0 = 0
 
+    # Weights: goal, time penalty, eaten penalty, entropy (penalty application is already negative in env)
+    w_goal, w_time, w_eaten, w_diversity = 10.0, 0.5, 2.0, 5.0
+
+    # Initial policy
     """
     Parameters order:
     0: separation scalar
@@ -56,18 +44,25 @@ def main():
                        0.3, #7: goal attraction gain
                        ], dtype=np.float32)
 
-    # Weights: goal, eaten penalty, time penalty, entropy
-    w_goal, w_eaten, w_obs, w_speed = 1.0, -0.5, -0.3, 0.2
-    W = np.array([w_goal, w_eaten, w_obs, w_speed], dtype=np.float32)
-
     # Exploration std: scalar or per-dim vector
     exploration_std = np.full((8,), [0.5, 0.5, 0.5, 0.5, 0.5, 2.0, 0.1, 0.1], dtype=np.float32)
 
+
+    env = FishGoalEnv(
+        boid_count=boid_count,
+        pred_count=pred_count,
+        max_steps=max_steps,
+        dt=dt,
+        w_goal=w_goal,
+        w_time=w_time,
+        w_eaten=w_eaten,
+        w_div=w_diversity,
+    )
     ma = MultiAgentPowerRL(
         init_params=theta0,
         exploration_std=exploration_std,
         n_agents=n_agents,
-        reuse_top_n=6,
+        reuse_top_n=2,
         diversity_strength=0.08,
     )
 
@@ -82,11 +77,16 @@ def main():
         for a_idx, agent in enumerate(ma.agents):
             for k in range(rollouts_per_iter):
                 theta_k = agent.sample_policy().astype(np.float32)
+                theta_k = np.clip(theta_k, 0.0, 20.0).astype(np.float32)
 
                 # Evaluate on multiple seeds to reduce noise
                 seeds = [seed0 + 100000 * it + 1000 * a_idx + 10 * k + r for r in range(eval_episodes)]
-                Rs = eval_theta(env, theta_k, seeds)
-                R = eval_reward(Rs, W)
+                R_theta = 0.0
+                for seed in seeds:
+                    env.reset(seed=seed)
+                    _, R, _, _, _ = env.step(theta_k)
+                    R_theta += R
+                R = R_theta / eval_episodes
 
                 agent.add_rollout(theta_k, R)
 
