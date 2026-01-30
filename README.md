@@ -51,6 +51,9 @@ scripts/
 ### 🔹 Goal-oriented roam after RL-optimization
 <img src="images/RL_roam.gif" width="800" alt="RL">
 
+### 🔹 HMM Fitting
+<img src="images/HMM.png" width="800" alt="HMM">
+
 </div>
 ---
 
@@ -74,6 +77,11 @@ Deterministic replay and visualization of learned θ.
 train_rl.py
 
 Policy search over θ using probabilistic reinforcement learning using Power RL.
+
+### HMM Fitting
+train_hmm.py
+
+Fit a HMM with GMR regression on fishes trajectories.
 
 ---
 
