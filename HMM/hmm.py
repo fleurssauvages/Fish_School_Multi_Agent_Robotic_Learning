@@ -2,6 +2,7 @@ import numpy as np
 from dataclasses import dataclass
 from hmmlearn.hmm import GMMHMM
 from scipy.special import logsumexp
+from numba import njit
 
 # ============================================================
 # Dataclass wrapper
@@ -39,32 +40,28 @@ class HMMGMM:
     # Training
     # ============================================================
 
+    def _pack_demos_with_time(self, demos):
+        demos = normalize_demos_list(demos)
+
+        lengths = np.fromiter((Y.shape[0] for Y in demos), dtype=np.int64)
+        N = int(lengths.sum())
+        Dp = demos[0].shape[1]          # position dim
+        X_all = np.empty((N, 1 + Dp), dtype=np.float64)
+
+        start = 0
+        for Y, T in zip(demos, lengths):
+            X_all[start:start+T, 0] = np.linspace(0.0, 1.0, T)
+            X_all[start:start+T, 1:] = Y
+            start += T
+
+        return X_all, lengths.tolist()
+
     def fit(self,pos_demos):
-        demos = normalize_demos_list(pos_demos)
-
-        seqs, lengths = [], []
-        for Y in demos:
-            T, Dp = Y.shape
-            t = np.linspace(0.0, 1.0, T)[:, None]
-            seqs.append(np.hstack([t, Y]))
-            lengths.append(T)
-
-        X_all = np.vstack(seqs)
-
+        X_all, lengths = self._pack_demos_with_time(pos_demos)
         self.model.fit(X_all, lengths)
 
     def update(self, pos_demos, n_iter=10):
-        demos = normalize_demos_list(pos_demos)
-
-        seqs, lengths = [], []
-        for Y in demos:
-            T, Dp = Y.shape
-            t = np.linspace(0.0, 1.0, T)[:, None]
-            seqs.append(np.hstack([t, Y]))
-            lengths.append(T)
-
-        X_all = np.vstack(seqs)
-
+        X_all, lengths = self._pack_demos_with_time(pos_demos)
         self.model.init_params = ""
         self.model.n_iter = n_iter
         self.model.fit(X_all, lengths)
@@ -91,39 +88,41 @@ class HMMGMM:
             cov_yy = np.zeros((self.n_states, self.n_mix, D-1, D-1))
             diag_y = self.model.covars_[:, :, 1:]  # (K,M,pos_dim)
             # fill diagonal matrices
-            for k in range(self.n_states):
-                for m in range(self.n_mix):
-                    cov_yy[k, m] = np.diag(diag_y[k, m] + 1e-12)
+            diag_y = self.model.covars_[:, :, 1:] + 1e-12        # (K,M,D)
+            I = np.eye(D-1)[None, None, :, :]                    # (1,1,D,D)
+            cov_yy = diag_y[:, :, :, None] * I     
         else:
             raise ValueError(f"Unsupported covariance_type: {covtype}")
 
         logw = np.log(self.model.weights_ + 1e-12)
 
-        logB = compute_logB_time_only(t_grid, logw, mu_t, var_t)
-        gamma, loglik = forward_backward_from_logB(self.model, logB)
+        logB = compute_logB(t_grid, logw, mu_t, var_t)
+        gamma, loglik = forward_backward_from_logB_numba(
+            self.model.startprob_,
+            self.model.transmat_,
+            logB
+        )
 
         # --- state means / covs
-        K, M = self.model.n_components, self.model.n_mix
-        state_mu = np.zeros((K, pos_dim))
-        state_S = np.zeros((K, pos_dim, pos_dim))
-        for k in range(K):
-            w = self.model.weights_[k]
-            mu_km = self.model.means_[k, :, 1:]
-            cov_km = cov_yy[k]  
-            mu = np.sum(w[:, None] * mu_km, axis=0)
-            S = np.zeros((pos_dim, pos_dim))
-            for m in range(M):
-                S += w[m] * (cov_km[m] + np.outer(mu_km[m], mu_km[m]))
-            S -= np.outer(mu, mu)
-            state_mu[k] = mu
-            state_S[k] = S
+        w = self.model.weights_              # (K,M)
+        mu_km = self.model.means_[:, :, 1:]  # (K,M,Dy)
+
+        # state mean: (K,Dy)
+        state_mu = np.einsum("km,kmd->kd", w, mu_km)
+
+        # second moment: sum_m w_m (Cov_m + mu_m mu_m^T)
+        ExxT = np.einsum("km,kmdn->kdn", w, cov_yy) + np.einsum("km,kmd,kmn->kdn", w, mu_km, mu_km)
+
+        # covariance: E[xx^T] - E[x]E[x]^T
+        state_S = ExxT - np.einsum("kd,kn->kdn", state_mu, state_mu)  # (K,Dy,Dy)
 
         mu_y = gamma @ state_mu
-        Sigma_y = np.zeros((T, pos_dim, pos_dim))
-        for t in range(T):
-            for k in range(K):
-                d = (state_mu[k] - mu_y[t]).reshape(pos_dim, 1)
-                Sigma_y[t] += gamma[t, k] * (state_S[k] + d @ d.T)
+        Sigma_within = np.einsum("tk,kij->tij", gamma, state_S)
+
+        diff = state_mu[None, :, :] - mu_y[:, None, :]          # (T,K,D)
+        Sigma_between = np.einsum("tk,tk i,tk j->tij", gamma, diff, diff)
+
+        Sigma_y = Sigma_within + Sigma_between
 
         return mu_y, Sigma_y, gamma, loglik
 
@@ -148,25 +147,21 @@ def normalize_demos_list(pos_demos):
 # FAST emission likelihoods
 # ============================================================
 
-def compute_logB_time_only(t_grid, logw, mu_t, var_t):
+def compute_logB(t_grid, logw, mu_t, var_t):
     """
     Vectorized time-only emission:
     logB[t,k] = log p(t | state k)
     """
-    T = t_grid.shape[0]
-    K, M = logw.shape
+    t = t_grid[:, None, None]          # (T,1,1)
+    mu = mu_t[None, :, :]              # (1,K,M)
+    var = var_t[None, :, :]            # (1,K,M)
 
-    const = logw - 0.5 * np.log(2.0 * np.pi * var_t)
-    invvar = 1.0 / var_t
+    const = logw[None, :, :] - 0.5 * np.log(2.0 * np.pi * var)   # (1,K,M)
+    invvar = 1.0 / var
+    diff2 = (t - mu) ** 2
 
-    logB = np.empty((T, K))
-    for t in range(T):
-        tt = t_grid[t]
-        diff2 = (tt - mu_t) ** 2
-        v = const - 0.5 * diff2 * invvar
-        logB[t] = logsumexp(v, axis=1)
-    return logB
-
+    v = const - 0.5 * diff2 * invvar   # (T,K,M)
+    return logsumexp(v, axis=2)        # (T,K)
 
 def state_log_emission_full(hmmgmm, x):
     """
@@ -223,4 +218,79 @@ def forward_backward_from_logB(hmm, logB):
     loggamma -= logsumexp(loggamma, axis=1, keepdims=True)
     gamma = np.exp(loggamma)
     loglik = logsumexp(logalpha[-1])
+    return gamma, loglik
+
+@njit(cache=True, fastmath=True)
+def _logsumexp_1d(a):
+    """Stable logsumexp for 1D array."""
+    amax = a[0]
+    for i in range(1, a.shape[0]):
+        if a[i] > amax:
+            amax = a[i]
+    s = 0.0
+    for i in range(a.shape[0]):
+        s += np.exp(a[i] - amax)
+    return amax + np.log(s)
+
+@njit(cache=True, fastmath=True)
+def forward_backward_from_logB_numba(startprob, transmat, logB):
+    """
+    Numba-accelerated forward-backward where:
+      startprob: (K,)
+      transmat:  (K,K)
+      logB:      (T,K)  already computed
+    returns:
+      gamma: (T,K)
+      loglik: float
+    """
+    T, K = logB.shape
+
+    # log-space start & transition
+    log_start = np.empty(K)
+    for k in range(K):
+        log_start[k] = np.log(startprob[k] + 1e-12)
+
+    log_trans = np.empty((K, K))
+    for i in range(K):
+        for j in range(K):
+            log_trans[i, j] = np.log(transmat[i, j] + 1e-12)
+
+    # forward
+    logalpha = np.empty((T, K))
+    for k in range(K):
+        logalpha[0, k] = log_start[k] + logB[0, k]
+
+    tmp = np.empty(K)
+    for t in range(1, T):
+        for j in range(K):
+            # tmp[i] = logalpha[t-1,i] + log_trans[i,j]
+            for i in range(K):
+                tmp[i] = logalpha[t - 1, i] + log_trans[i, j]
+            logalpha[t, j] = logB[t, j] + _logsumexp_1d(tmp)
+
+    # backward
+    logbeta = np.zeros((T, K))
+    tmp2 = np.empty(K)
+    for t in range(T - 2, -1, -1):
+        for i in range(K):
+            # tmp2[j] = log_trans[i,j] + logB[t+1,j] + logbeta[t+1,j]
+            for j in range(K):
+                tmp2[j] = log_trans[i, j] + logB[t + 1, j] + logbeta[t + 1, j]
+            logbeta[t, i] = _logsumexp_1d(tmp2)
+
+    # gamma
+    gamma = np.empty((T, K))
+    for t in range(T):
+        # loggamma = logalpha + logbeta, then normalize row with logsumexp
+        for k in range(K):
+            tmp[k] = logalpha[t, k] + logbeta[t, k]
+        norm = _logsumexp_1d(tmp)
+        for k in range(K):
+            gamma[t, k] = np.exp((logalpha[t, k] + logbeta[t, k]) - norm)
+
+    # loglik = logsumexp(logalpha[T-1])
+    for k in range(K):
+        tmp[k] = logalpha[T - 1, k]
+    loglik = _logsumexp_1d(tmp)
+
     return gamma, loglik

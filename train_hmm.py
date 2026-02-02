@@ -114,8 +114,8 @@ if __name__ == "__main__":
     """ Parameters"""
     n_demos = 5
     space_stride = 5
-    time_stride = 5
-    n_states = 8
+    time_stride = 10
+    n_states = 6
     n_mix = 1
     cov_type = "diag"  # "diag" or "full"
 
