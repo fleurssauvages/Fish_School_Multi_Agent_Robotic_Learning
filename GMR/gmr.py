@@ -63,14 +63,16 @@ class GMRGMM:
         """
         Warm-start update: reuse previous parameters to continue EM.
         """
-        X_all, _ = self._pack_demos_with_time(pos_demos)
+        import warnings
+        from sklearn.exceptions import ConvergenceWarning
 
-        # enable warm-start
+        X_all, _ = self._pack_demos_with_time(pos_demos)
         self.model.warm_start = True
         self.model.max_iter = n_iter
 
-        # sklearn warm_start requires a previous fit; assume you already called fit()
-        self.model.fit(X_all)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            self.model.fit(X_all)
 
     # -------- core GMR --------
 

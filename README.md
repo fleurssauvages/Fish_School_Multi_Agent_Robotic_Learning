@@ -51,8 +51,8 @@ scripts/
 ### 🔹 Goal-oriented roam after RL-optimization
 <img src="images/RL_roam.gif" width="800" alt="RL">
 
-### 🔹 HMM Fitting
-<img src="images/HMM.png" width="800" alt="HMM">
+### 🔹 GMR Fitting
+<img src="images/GMR.png" width="800" alt="GMR">
 
 </div>
 ---
@@ -78,10 +78,10 @@ train_rl.py
 
 Policy search over θ using probabilistic reinforcement learning using Power RL.
 
-### HMM Fitting
-train_hmm.py
+### GMR Fitting
+train_gmr.py
 
-Fit a HMM with GMR regression on fishes trajectories.
+Fit a GMR regression on fishes trajectories.
 
 ---
 

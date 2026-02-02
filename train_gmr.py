@@ -120,7 +120,7 @@ if __name__ == "__main__":
     x_via = x_via_center + np.array([0.0, r * np.cos(angle), r * np.sin(angle)])
 
     # ============================================================
-    # Fit an HMM-GMM model
+    # Fit an GMR model
     # ============================================================
     """ Parameters"""
     n_demos = 15
@@ -131,19 +131,19 @@ if __name__ == "__main__":
 
     pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
     
-    """ Fit an HMM-GMM model to the demonstrations """
+    """ Fit an GMR-GMM model to the demonstrations """
     gmr = GMRGMM(n_components=n_components, seed=0, cov_type=cov_type)
     t0 = time.time()
     gmr.fit(pos_demos)
     t1 = time.time()
-    print(f"HMM-GMM Training Time: {(t1 - t0)*1000.0:.2f} ms")
+    print(f"GMR-GMM Warmup Time: {(t1 - t0)*1000.0:.2f} ms")
 
     """ Update with new via point """
     t0 = time.time()
     pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
     gmr.update(pos_demos, n_iter=15)
     t1 = time.time()
-    print(f"HMM-GMM Update Time: {(t1 - t0)*1000.0:.2f} ms")
+    print(f"GMR-GMM Update Time: {(t1 - t0)*1000.0:.2f} ms")
 
     """ Perform regression to get mean and covariance of trajectory """
     t0 = time.time()
@@ -217,7 +217,6 @@ if __name__ == "__main__":
         pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
         gmr.update(pos_demos, n_iter=15)
         t1 = time.time()
-        print(f"HMM-GMM Update Time with active plot: {(t1 - t0)*1000.0:.2f} ms")
 
         update_demo_lines(pos_demos)
         mu_y, Sigma_y, gamma, loglik = gmr.regress(T=max_steps, pos_dim=3)
@@ -236,6 +235,42 @@ if __name__ == "__main__":
         valmax=2.0 * np.pi,
         valinit=0.0,
     )
-
     angle_slider.on_changed(_on_slider_change)
+
+    def _on_slider_percent_change(val):
+        global demos_plot, mu, wireframes, via_scatter
+        angle = angle_slider.val
+        percent = percent_slider.val
+        x_via_center = env.start + percent * (env.goal - env.start)
+        x_via = x_via_center + r * np.array([0.0, np.cos(angle), np.sin(angle)])
+        via_scatter._offsets3d = (
+            np.array([x_via[0]]),
+            np.array([x_via[1]]),
+            np.array([x_via[2]])
+        )
+
+        t0 = time.time()
+        pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
+        gmr.update(pos_demos, n_iter=15)
+        t1 = time.time()
+
+        update_demo_lines(pos_demos)
+        mu_y, Sigma_y, gamma, loglik = gmr.regress(T=max_steps, pos_dim=3)
+        mu_line.set_data(mu_y[:,0], mu_y[:,1])
+        mu_line.set_3d_properties(mu_y[:,2])
+
+        refresh_wireframes(ax_traj, wireframes, mu_y, Sigma_y,
+                   step=30, n_std=1.5, n_points=20, alpha=0.3)
+
+        fig.canvas.draw_idle()
+
+    percent_slider = Slider(
+        ax=fig.add_axes([0.65, 0.02, 0.15, 0.03]),
+        label='Via Point Percent',
+        valmin=0.0,
+        valmax=1.0,
+        valinit=0.5,
+    )
+    percent_slider.on_changed(_on_slider_percent_change)
+
     plt.show()

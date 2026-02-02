@@ -3,7 +3,7 @@ import scipy.sparse as sp
 from qpsolvers import solve_qp
 
 
-class MultiDroneCBFQP:
+class DroneCBFQP:
     """
     Multi-drone CBF-QP safety filter.
 
@@ -51,7 +51,6 @@ class MultiDroneCBFQP:
         d_obs_margin=0.10,
         d_safe=0.30,
         alpha_obs=2.0,
-        alpha_pair=2.0,
         use_slack=True,
         rho_slack=1e4,
         solver="osqp",
@@ -81,7 +80,6 @@ class MultiDroneCBFQP:
         d_obs_margin = float(d_obs_margin)
         d_safe = float(d_safe)
         alpha_obs = float(alpha_obs)
-        alpha_pair = float(alpha_pair)
         rho_slack = float(rho_slack)
 
         # ---- build base QP: min ||v - v_nom||^2 ----
@@ -112,21 +110,6 @@ class MultiDroneCBFQP:
                     row[3 * i : 3 * i + 3] = a
                     G_rows.append(row)
                     h_rows.append(b)
-
-        if alpha_pair > 0.0:
-            # (B) Inter-drone CBF constraints (one per pair)
-            # 2(p_i-p_j)^T (v_i - v_j) + alpha*h >= 0
-            # => (-2d^T) v_i + (2d^T) v_j <= alpha*h
-            for i in range(self.N):
-                for j in range(i + 1, self.N):
-                    d = pos[i] - pos[j]
-                    h_val = float(d @ d - d_safe * d_safe)
-
-                    row = np.zeros(self.nv)
-                    row[3 * i : 3 * i + 3] = -2.0 * d
-                    row[3 * j : 3 * j + 3] = +2.0 * d
-                    G_rows.append(row)
-                    h_rows.append(alpha_pair * h_val)
 
         if len(G_rows) == 0:
             # No constraints: just clip components
