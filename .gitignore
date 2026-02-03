@@ -1,1 +1,4 @@
 /gym_pybullet_drones
+/controllers
+/MPC
+shared_controller_drone.py

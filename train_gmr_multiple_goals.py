@@ -4,6 +4,7 @@ import numpy as np
 from RL.env import FishGoalEnv
 import pickle
 import numpy as np
+import copy
 
 import matplotlib.pyplot as plt
 from RL.env import FishGoalEnv
@@ -91,32 +92,67 @@ if __name__ == "__main__":
 
     boid_count = 300
     max_steps = 200
-    obs_centers =  np.array([[20.0, 20.0, 20.0],
-                            [28.0, 16.0, 22.0],
-                            [28.0, 24.0, 18.0]], dtype=np.float32)
-    t0 = time.time()
-    env = FishGoalEnv(boid_count=boid_count, pred_count=0, max_steps=max_steps, dt=1, doAnimation = False, returnTrajectory = True, obs_centers=obs_centers)
-    env.reset(seed=0)
-    t1 = time.time()
-    print(f"Fish Warmup Time: {(t1 - t0)*1000.0:.2f} ms")
+    obs_centers = np.array([
+        # corridor-ish cluster
+        [24.0, 18.0, 16.0],
+        [28.0, 24.0, 16.0],
+        [20.0, 30.0, 16.0],
+        [18.0, 18.0, 12.0],
+        [28.0, 24.0, 30.0],
+        [24.0, 30.0, 16.0],
+    ], dtype=np.float32)
+
+    goals = [
+        np.array([36.0, 12.0, 16.0], dtype=np.float32),
+        np.array([36.0, 24.0, 16.0], dtype=np.float32),
+        np.array([36.0, 36.0, 16.0], dtype=np.float32),
+    ]
+
+    boids_pos_list = []
+    boids_vel_list = []
+    x_start = np.array([12.0, 24.0, 16.0], dtype=np.float32)
 
     t0 = time.time()
-    obs, reward, terminated, truncated, info = env.step(action)
-    env.reset(seed=0)
-    t1 = time.time()
-    print(f"Fish Simulation Time: {(t1 - t0)*1000.0:.2f} ms")
+    for gi, g in enumerate(goals):
+        env = FishGoalEnv(
+            boid_count=boid_count,
+            pred_count=0,
+            max_steps=max_steps,
+            dt=1,
+            doAnimation=False,
+            returnTrajectory=True,
+            obs_centers=obs_centers,
+            goal = g,
+            start = x_start
+        )
+        env.reset(seed=gi)  # different seed per goal
 
-    """Select some demos near via point"""
-    # Extract trajectory from boids
-    t0 = time.time()
-    boids_pos = info['trajectory_boid_pos']  # (T, N, 3)
-    boids_vel = info['trajectory_boid_vel']  # (T, N, 3)
-    x_start = env.start
-    x_goal = env.goal
+        # If FishGoalEnv lets you overwrite the goal (most do):
+        env.goal = g
+
+        # step once with the policy (your original pattern)
+        obs, reward, terminated, truncated, info = env.step(action)
+
+        # store
+        boids_pos = info['trajectory_boid_pos']  # (T, N, 3)
+        boids_vel = info['trajectory_boid_vel']  # (T, N, 3)
+
+        boids_pos_list.append(boids_pos)
+        boids_vel_list.append(boids_vel)
+
+        if x_start is None:
+            x_start = env.start.copy()
+
+    t1 = time.time()
+    print(f"Fish 3x Simulation Time: {(t1 - t0)*1000.0:.2f} ms")
+
+    # stack along boid dimension -> (T, 3N, 3)
+    boids_pos = np.concatenate(boids_pos_list, axis=1)
+    boids_vel = np.concatenate(boids_vel_list, axis=1)
     
     angle = 0.0
-    r = 5.0
-    x_via_center = np.array([20.0, 20.0, 20.0])
+    r = 10.0
+    x_via_center = np.array([24.0, 24.0, 16.0])
     x_via = x_via_center + np.array([0.0, r * np.cos(angle), r * np.sin(angle)])
 
     # ============================================================
@@ -132,22 +168,23 @@ if __name__ == "__main__":
     pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
     
     """ Fit an GMR-GMM model to the demonstrations """
-    gmr = GMRGMM(n_components=n_components, seed=0, cov_type=cov_type)
+    gmrInit = GMRGMM(n_components=n_components, seed=0, cov_type=cov_type)
     t0 = time.time()
-    gmr.fit(pos_demos)
+    gmrInit.fit(pos_demos)
     t1 = time.time()
     print(f"GMR-GMM Warmup Time: {(t1 - t0)*1000.0:.2f} ms")
 
     """ Update with new via point """
     t0 = time.time()
     pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
-    gmr.update(pos_demos, n_iter=15)
+    gmrUpdated = copy.deepcopy(gmrInit)
+    gmrUpdated.update(pos_demos, n_iter=15)
     t1 = time.time()
     print(f"GMR-GMM Update Time: {(t1 - t0)*1000.0:.2f} ms")
 
     """ Perform regression to get mean and covariance of trajectory """
     t0 = time.time()
-    mu_y, Sigma_y, gamma, loglik = gmr.regress(T=max_steps, pos_dim=3)
+    mu_y, Sigma_y, gamma, loglik = gmrUpdated.regress(T=max_steps, pos_dim=3)
     t1 = time.time()
     print(f"Model Regression: {(t1 - t0)*1000.0:.2f} ms")
 
@@ -180,20 +217,21 @@ if __name__ == "__main__":
     refresh_wireframes(ax_traj, wireframes, mu_y, Sigma_y,
                    step=30, n_std=1.5, n_points=20, alpha=0.3)
 
-    r = env.obs_radius
+    rad = env.obs_radius
     for c in env.obs_centers:
         u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:20j]
-        x = c[0] + r * np.cos(u) * np.sin(v)
-        y = c[1] + r * np.sin(u) * np.sin(v)
-        z = c[2] + r * np.cos(v)
+        x = c[0] + rad * np.cos(u) * np.sin(v)
+        y = c[1] + rad * np.sin(u) * np.sin(v)
+        z = c[2] + rad * np.cos(v)
         ax_traj.plot_surface(x, y, z, color='red', alpha=0.25, linewidth=0)
 
     ax_traj.scatter(x_start[0], x_start[1], x_start[2], c='blue', s=100, label='Start')
-    ax_traj.scatter(x_goal[0], x_goal[1], x_goal[2], c='green', s=100, label='Goal')
+    for goal in goals:
+        ax_traj.scatter(goal[0], goal[1], goal[2], c='green', s=100, label='Goal')
     via_scatter = ax_traj.scatter(x_via[0], x_via[1], x_via[2], c='orange', s=100, label='Via Point')
 
-    c = (x_start + x_goal) / 2
-    span = np.linalg.norm(x_goal - x_start) / 2 + 1.0
+    c = (x_start + goals[1]) / 2
+    span = np.linalg.norm(goals[1] - x_start) / 2 + 1.0
     ax_traj.set_xlim(c[0] - span, c[0] + span)
     ax_traj.set_ylim(c[1] - span, c[1] + span)
     ax_traj.set_zlim(c[2] - span, c[2] + span)
@@ -202,77 +240,78 @@ if __name__ == "__main__":
     ax_traj.set_ylabel("y")
     ax_traj.set_zlabel("z")
     plt.legend()
-
-    def _on_slider_change(val):
+    
+    def _on_via_xyz_change(val):
         global demos_plot, mu, wireframes, via_scatter
-        angle = angle_slider.val
-        percent = percent_slider.val
-        x_via_center = env.start + percent * (env.goal - env.start)
-        x_via = x_via_center + r * np.array([0.0, np.cos(angle), np.sin(angle)])
+
+        # read sliders
+        x_via = np.array([x_slider.val, y_slider.val, z_slider.val], dtype=float)
+
+        # move the via point marker
         via_scatter._offsets3d = (
             np.array([x_via[0]]),
             np.array([x_via[1]]),
             np.array([x_via[2]])
         )
 
-        t0 = time.time()
-        pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
-        gmr.update(pos_demos, n_iter=15)
-        t1 = time.time()
+        # reselect demos near new via point
+        pos_demos = select_demos_near_via(
+            boids_pos, x_via,
+            n_demos=n_demos,
+            space_stride=space_stride,
+            time_stride=time_stride
+        )
 
+        # update a fresh copy of the initial model
+        gmrUpdated = copy.deepcopy(gmrInit)
+        gmrUpdated.update(pos_demos, n_iter=15)
+
+        # update demo lines + GMR mean + uncertainty
         update_demo_lines(pos_demos)
-        mu_y, Sigma_y, gamma, loglik = gmr.regress(T=max_steps, pos_dim=3)
-        mu_line.set_data(mu_y[:,0], mu_y[:,1])
-        mu_line.set_3d_properties(mu_y[:,2])
+        mu_y, Sigma_y, gamma, loglik = gmrUpdated.regress(T=max_steps, pos_dim=3)
 
-        refresh_wireframes(ax_traj, wireframes, mu_y, Sigma_y,
-                   step=30, n_std=1.5, n_points=20, alpha=0.3)
+        mu_line.set_data(mu_y[:, 0], mu_y[:, 1])
+        mu_line.set_3d_properties(mu_y[:, 2])
+
+        refresh_wireframes(
+            ax_traj, wireframes, mu_y, Sigma_y,
+            step=30, n_std=1.5, n_points=20, alpha=0.3
+        )
 
         fig.canvas.draw_idle()
 
-    angle_slider = Slider(
+
+    # Choose sensible slider bounds from your data (recommended)
+    # Here: bounds from trajectory extents so the via point stays in the scene.
+    mins = np.array([12, 12, 12])
+    maxs = np.array([36, 36, 24])
+
+    # initial value: your current x_via_center (or any point you want)
+    x_via0 = np.array(x_via_center, dtype=float)
+
+    # Layout: 3 sliders stacked
+    x_slider = Slider(
         ax=fig.add_axes([0.25, 0.02, 0.15, 0.03]),
-        label='Via Point Angle',
-        valmin=0.0,
-        valmax=2.0 * np.pi,
-        valinit=0.0,
+        label='Via X',
+        valmin=float(mins[0]), valmax=float(maxs[0]),
+        valinit=float(x_via0[0]),
     )
-    angle_slider.on_changed(_on_slider_change)
-
-    def _on_slider_percent_change(val):
-        global demos_plot, mu, wireframes, via_scatter
-        angle = angle_slider.val
-        percent = percent_slider.val
-        x_via_center = env.start + percent * (env.goal - env.start)
-        x_via = x_via_center + r * np.array([0.0, np.cos(angle), np.sin(angle)])
-        via_scatter._offsets3d = (
-            np.array([x_via[0]]),
-            np.array([x_via[1]]),
-            np.array([x_via[2]])
-        )
-
-        t0 = time.time()
-        pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
-        gmr.update(pos_demos, n_iter=15)
-        t1 = time.time()
-
-        update_demo_lines(pos_demos)
-        mu_y, Sigma_y, gamma, loglik = gmr.regress(T=max_steps, pos_dim=3)
-        mu_line.set_data(mu_y[:,0], mu_y[:,1])
-        mu_line.set_3d_properties(mu_y[:,2])
-
-        refresh_wireframes(ax_traj, wireframes, mu_y, Sigma_y,
-                   step=30, n_std=1.5, n_points=20, alpha=0.3)
-
-        fig.canvas.draw_idle()
-
-    percent_slider = Slider(
+    y_slider = Slider(
+        ax=fig.add_axes([0.45, 0.02, 0.15, 0.03]),
+        label='Via Y',
+        valmin=float(mins[1]), valmax=float(maxs[1]),
+        valinit=float(x_via0[1]),
+    )
+    z_slider = Slider(
         ax=fig.add_axes([0.65, 0.02, 0.15, 0.03]),
-        label='Via Point Percent',
-        valmin=0.0,
-        valmax=1.0,
-        valinit=0.5,
+        label='Via Z',
+        valmin=float(mins[2]), valmax=float(maxs[2]),
+        valinit=float(x_via0[2]),
     )
-    percent_slider.on_changed(_on_slider_percent_change)
+
+    # Attach the same callback to all three
+    x_slider.on_changed(_on_via_xyz_change)
+    y_slider.on_changed(_on_via_xyz_change)
+    z_slider.on_changed(_on_via_xyz_change)
 
     plt.show()

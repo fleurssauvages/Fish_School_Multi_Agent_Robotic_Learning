@@ -964,7 +964,6 @@ class FishGoalEnv(gym.Env):
         episode_seed = int(self._rng.integers(0, 2**31 - 1))
         self._episode_seed = episode_seed
 
-
     def step(self, action):
         if self._episode_seed is None:
             raise RuntimeError("Call reset() before step().")
