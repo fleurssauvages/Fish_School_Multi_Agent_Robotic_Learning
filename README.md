@@ -1,4 +1,4 @@
-### Fish School / Boids-Inspired Multi-Agent Simulation and Learning for Drones Flock
+### Fish School / Boids-Inspired Multi-Agent Simulation and Learning for GMR Modelisation
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![RL](https://img.shields.io/badge/reinforcement--learning-probabilistic-green)](#)
@@ -11,16 +11,15 @@ The codebase supports:
 - Goal-directed collective navigation
 - Replayable environments to animate or re-execute a learned parameter vector θ
 - Reinforcement learning over low-dimensional behavior parameters
-
-TODO: Adapt the behaviour to drone using the Hierarchical LMPC from https://github.com/fleurssauvages/Multi_RL_LMPC_for_Drone_Flock
+- Live Prediction using GMM-GMR
 
 ---
 
 ## 🐠 Biological & Algorithmic Inspiration
 
-This work is inspired by classical and modern studies of collective animal behavior, in particular:
+This work is inspired by classical and modern studies of collective schooling, in particular:
 
-- **Boids model** (Reynolds, 1987):
+- **Boids model** (Reynolds, 1987)
 - Erik Martin Vetemaa Bachelor Thesis, https://github.com/vetemaa/fish-simulation and https://thesis.cs.ut.ee/a62fdbba-061c-475d-851e-8c49d61b09df
 
 ---
@@ -35,6 +34,8 @@ scripts/
 - free_roam.py — Emergent motion without a goal
 - goal_roam.py — Goal-directed collective navigation with tunable actions using sliders
 - train_rl.py — Reinforcement learning over θ to learn the "best" behaviour given a reward
+- train_gmr.py - GMR to predict and extract a behaviour
+- train_gmr_multiple_goals.py - Extended to multiple goals
 
 ---
 
@@ -94,5 +95,3 @@ MIT License — see LICENSE file.
 ## ⭐ Acknowledgments
 
 - Craig Reynolds — Boids (1987)
-- Collective animal behavior and swarm intelligence literature
-- Probabilistic reinforcement learning methods
