@@ -36,6 +36,7 @@ scripts/
 - train_rl.py — Reinforcement learning over θ to learn the "best" behaviour given a reward
 - train_gmr.py - GMR to predict and extract a behaviour
 - train_gmr_multiple_goals.py - Extended to multiple goals
+- train_gmr_history.py - Extended to multiple goals and moving point using a SpaceMouse 3D Joystick
 
 ---
 
@@ -52,8 +53,8 @@ scripts/
 ### 🔹 Goal-oriented roam after RL-optimization
 <img src="images/RL_roam.gif" width="800" alt="RL">
 
-### 🔹 GMR Fitting
-<img src="images/GMR.png" width="800" alt="GMR">
+### 🔹 GMR Fitting with Multiple Goals
+<img src="images/GMR.gif" width="800" alt="GMR">
 
 </div>
 ---

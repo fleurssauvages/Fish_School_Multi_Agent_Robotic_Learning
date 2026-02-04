@@ -10,75 +10,7 @@ import matplotlib.pyplot as plt
 from RL.env import FishGoalEnv
 
 from GMR.gmr import GMRGMM
-
-def refresh_wireframes(ax, wireframes, mu_y, Sigma_y, step=30, n_std=1.5, n_points=20, alpha=0.08):
-    for wf in wireframes:
-        try:
-            wf.remove()
-        except Exception:
-            pass
-    wireframes.clear()
-
-    # redraw new (fewer + cheaper)
-    for t in range(0, len(mu_y), step):
-        X, Y, Z = gaussian_ellipsoid(mu_y[t], Sigma_y[t], n_std=n_std, n_points=n_points)
-        wf = ax.plot_wireframe(X, Y, Z, alpha=alpha)
-        wireframes.append(wf)
-
-def gaussian_ellipsoid(mean, cov, n_std=1.5, n_points=30):
-    """
-    Returns X,Y,Z points of a 3D covariance ellipsoid.
-    """
-    # Eigen-decomposition
-    eigvals, eigvecs = np.linalg.eigh(cov)
-    order = eigvals.argsort()[::-1]
-    eigvals = eigvals[order]
-    eigvecs = eigvecs[:, order]
-
-    # Radii
-    radii = n_std * np.sqrt(np.maximum(eigvals, 0))
-
-    # Sphere
-    u = np.linspace(0, 2*np.pi, n_points)
-    v = np.linspace(0, np.pi, n_points)
-    x = np.outer(np.cos(u), np.sin(v))
-    y = np.outer(np.sin(u), np.sin(v))
-    z = np.outer(np.ones_like(u), np.cos(v))
-
-    # Transform
-    sphere = np.stack([x, y, z], axis=-1)
-    ellipsoid = sphere @ np.diag(radii) @ eigvecs.T
-    ellipsoid += mean
-
-    return ellipsoid[..., 0], ellipsoid[..., 1], ellipsoid[..., 2]
-
-def plot_gmr_uncertainty_3d(mu_y, Sigma_y, step=10, n_std=1.5, ax=None):
-    wireframes = []
-    for t in range(0, len(mu_y), step):
-        X, Y, Z = gaussian_ellipsoid(mu_y[t], Sigma_y[t], n_std=n_std)
-        wf = ax.plot_wireframe(X, Y, Z, alpha=0.1)
-        wireframes.append(wf)
-    return wireframes
-
-def select_demos_near_via_anytime(pos_demos, via_point, k=10, stride=1):
-    pos_demos = np.asarray(pos_demos, float)
-
-    # distances: (N,T)
-    d_t = np.linalg.norm(pos_demos - via_point, axis=2)
-    d = d_t.min(axis=0)
-    idx = np.argsort(d)[:k*stride:stride]
-    return idx, d[idx]
-
-def select_demos_near_via(boids_pos, via_point, n_demos=3, space_stride=5, time_stride=10):
-    idx, _ = select_demos_near_via_anytime(boids_pos, via_point, k=n_demos, stride=space_stride)
-    pos_demos = []
-    for i in idx:
-        demo = boids_pos[:, i, :]
-        valid = (np.linalg.norm(demo, axis=1) > 1e-3)
-        demo = demo[valid, :]
-        demo = demo[::time_stride, :]
-        pos_demos.append(demo)
-    return pos_demos
+from GMR.utils import select_demos, refresh_wireframes, plot_gmr_uncertainty_3d
 
 if __name__ == "__main__":
     # ============================================================
@@ -165,7 +97,7 @@ if __name__ == "__main__":
     n_components = 6
     cov_type = "full"  # "diag" or "full"
 
-    pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
+    pos_demos = select_demos(boids_pos, [x_via], n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
     
     """ Fit an GMR-GMM model to the demonstrations """
     gmrInit = GMRGMM(n_components=n_components, seed=0, cov_type=cov_type)
@@ -176,7 +108,7 @@ if __name__ == "__main__":
 
     """ Update with new via point """
     t0 = time.time()
-    pos_demos = select_demos_near_via(boids_pos, x_via, n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
+    pos_demos = select_demos(boids_pos, [x_via], n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
     gmrUpdated = copy.deepcopy(gmrInit)
     gmrUpdated.update(pos_demos, n_iter=15)
     t1 = time.time()
@@ -255,13 +187,8 @@ if __name__ == "__main__":
         )
 
         # reselect demos near new via point
-        pos_demos = select_demos_near_via(
-            boids_pos, x_via,
-            n_demos=n_demos,
-            space_stride=space_stride,
-            time_stride=time_stride
-        )
-
+        pos_demos = select_demos(boids_pos, [x_via], n_demos=n_demos, space_stride=space_stride, time_stride=time_stride)
+        
         # update a fresh copy of the initial model
         gmrUpdated = copy.deepcopy(gmrInit)
         gmrUpdated.update(pos_demos, n_iter=15)
