@@ -9,6 +9,62 @@ from GMR.gmr import GMRGMM
 from controllers.spacemouse import SpaceMouse3D
 
 from GMR.utils import select_demos, refresh_wireframes
+from MPC.LMPC_solver_obs import LinearMPCController
+import spatialmath as sm
+
+def _sigmoid(z: float) -> float:
+    return 1.0 / (1.0 + np.exp(-z))
+
+def compute_alpha(
+    u_h: np.ndarray,
+    v_ref: np.ndarray,
+    Sigma: np.ndarray | float,
+    *,
+    alpha_max: float = 1.0,
+    # alignment gate
+    c0: float = 0.7,       # cosine threshold: must be "somewhat along"
+    k_a: float = 10.0,     # sharpness
+    u_deadzone: float = 1e-3,
+    # confidence gate (scalar uncertainty s)
+    s0: float = 10.0,      # uncertainty threshold (tune to your Sigma scale)
+    k_s: float = 10.0,
+) -> float:
+    """
+    Returns alpha in [0, alpha_max]. Increases when:
+      - user input aligns with reference direction, AND
+      - Sigma is small (confident).
+    Drops when either worsens.
+    """
+
+    u_h = np.asarray(u_h, dtype=float).reshape(-1)
+    v_ref = np.asarray(v_ref, dtype=float).reshape(-1)
+
+    # --- deadzone: if user not pushing, don't assist
+    if np.linalg.norm(u_h) < u_deadzone or np.linalg.norm(v_ref) < 1e-12:
+        alpha_star = 0.0
+    else:
+        # alignment cosine in [-1, 1]
+        c = float(u_h @ v_ref) / (float(np.linalg.norm(u_h) * np.linalg.norm(v_ref)) + 1e-12)
+        c = max(-1.0, min(1.0, c))
+
+        g_align = _sigmoid(k_a * (c - c0))
+
+        # scalar uncertainty s
+        if np.isscalar(Sigma):
+            s = float(Sigma)
+        else:
+            Sigma = np.asarray(Sigma, dtype=float)
+            # robust choice: sqrt(trace(Sigma))
+            s = float(np.sqrt(np.trace(Sigma)))
+
+        g_sigma = _sigmoid(k_s * (s0 - s))  # smaller s -> closer to 1
+
+        alpha_star = alpha_max * g_align * g_sigma
+
+    # clamp
+    alpha = max(0.0, min(alpha_max, alpha_star))
+    return alpha
+
 
 # ----------------------------
 # Main
@@ -118,10 +174,10 @@ if __name__ == "__main__":
 
     # demos + model
     demo_lines = [ax.plot([], [], [], "k--", lw=1.0, alpha=0.7)[0] for _ in range(n_demos)]
-    mu_line = ax.plot(mu_y[:, 0], mu_y[:, 1], mu_y[:, 2], "k", lw=2.0)[0]
+    # mu_line = ax.plot(mu_y[:, 0], mu_y[:, 1], mu_y[:, 2], "k", lw=2.0)[0]
 
     wireframes = []
-    refresh_wireframes(ax, wireframes, mu_y, Sigma_y, step=30, n_std=1.5, n_points=18, alpha=0.25)
+    # refresh_wireframes(ax, wireframes, mu_y, Sigma_y, step=30, n_std=1.5, n_points=18, alpha=0.25)
 
     # live cursor + history path (avoid orange)
     cursor_scatter = ax.scatter(x[0], x[1], x[2], s=70)      # default color
@@ -148,7 +204,7 @@ if __name__ == "__main__":
             else:
                 ln.set_visible(False)
 
-    set_demo_lines(pos_demos)
+    # set_demo_lines(pos_demos)
 
     # ----------------------------
     # 6) Live loop
@@ -156,16 +212,62 @@ if __name__ == "__main__":
     last_update_t = time.time()
     last_t = time.time()
     last_x_for_update = x.copy()
+    alpha = 0.0
+
+    speed_limit = 10
+    lmpc_solver = LinearMPCController(horizon=10, dt=1/200, gamma = 0.05,
+                                    u_min=np.array([-speed_limit, -speed_limit, -speed_limit, -speed_limit, -speed_limit, -speed_limit]),
+                                    u_max=np.array([ speed_limit,  speed_limit,  speed_limit,  speed_limit,  speed_limit,  speed_limit]))
+
+    obstacle_list = [{"center": obs, "radius": env.obs_radius} for obs in obs_centers]
+
+
+    def interpolate_traj(p0, p1, n):
+        p0 = np.asarray(p0)
+        p1 = np.asarray(p1)
+
+        t = np.linspace(0.0, 1.0, n)[:, None]   # shape (n,1)
+        traj = p0 + t * (p1 - p0)
+
+        return traj
 
     try:
         plt.ion()
         while plt.fignum_exists(fig.number):
             now = time.time()
-            dt = max(1e-4, now - last_t)
+            dt = 20
 
             trans, rot, buttons = spm.read() 
             v = np.array(trans, dtype=float)
-            x = x + v * dt
+
+            # Compute autonomy
+            d = np.linalg.norm(mu_y - x[None, :], axis=1)
+            tidx = int(np.argmin(d))
+            if tidx < max_steps -1:
+                v_ref = (mu_y[tidx + 1] - mu_y[tidx]) / dt
+                traj = interpolate_traj(mu_y[tidx], mu_y[tidx + 1], lmpc_solver.horizon)
+            else:
+                v_ref = np.zeros(3)
+                traj = None
+            if np.linalg.norm(v_ref) > 1e-3:
+                v_ref *= np.linalg.norm(v) / np.linalg.norm(v_ref)
+            sigma = Sigma_y[tidx]
+            alpha = compute_alpha(v, v_ref, sigma)
+
+            T_i = sm.SE3.Trans(x)
+            T_des_human = sm.SE3.Trans(x + v * dt)
+            T_des_GMR = sm.SE3.Trans(x + v_ref * dt)
+
+            Uopt, Xopt, poses = lmpc_solver.solve(T_i, T_des_human, T_des_GMR, 1 - alpha, obstacles=obstacle_list, traj=None, margin=0.0)
+            print(alpha)
+
+            if Uopt is None:
+                vopt = np.zeros(3)
+            vopt = Uopt[0:3]
+            if np.linalg.norm(vopt) > 1e-3:
+                vopt *= np.linalg.norm(v) / np.linalg.norm(vopt)
+
+            x = x + vopt * dt
 
             if np.linalg.norm(x - history[-1]) > 1e-6:
                 history.append(x.copy())
@@ -195,10 +297,10 @@ if __name__ == "__main__":
                 mu_y, Sigma_y, gamma, loglik = gmrUpdate.regress(T=max_steps, pos_dim=3)
 
                 # redraw model
-                set_demo_lines(pos_demos)
-                mu_line.set_data(mu_y[:, 0], mu_y[:, 1])
-                mu_line.set_3d_properties(mu_y[:, 2])
-                refresh_wireframes(ax, wireframes, mu_y, Sigma_y, step=30, n_std=1.5, n_points=18, alpha=0.25)
+                # set_demo_lines(pos_demos)
+                # mu_line.set_data(mu_y[:, 0], mu_y[:, 1])
+                # mu_line.set_3d_properties(mu_y[:, 2])
+                # refresh_wireframes(ax, wireframes, mu_y, Sigma_y, step=30, n_std=1.5, n_points=18, alpha=0.25)
 
             plt.pause(0.001)
 
