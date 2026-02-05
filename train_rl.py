@@ -9,17 +9,17 @@ def main():
     boid_count = 500
     pred_count = 4
     max_steps = 300
-    dt = 0.01
+    dt = 1.0
 
     # --- RL Parameters ---
-    n_agents = 6
+    n_agents = 24
     iters = 10
     rollouts_per_iter = 4
     eval_episodes = 2
     seed0 = 0
 
     # Weights: goal, time penalty, eaten penalty, entropy (penalty application is already negative in env)
-    w_goal, w_time, w_eaten, w_diversity = 10.0, 0.5, 2.0, 5.0
+    w_goal, w_time, w_eaten, w_diversity = 10.0, 0.5, 2.0, 10.0
 
     # Initial policy
     """
@@ -45,7 +45,7 @@ def main():
                        ], dtype=np.float32)
 
     # Exploration std: scalar or per-dim vector
-    exploration_std = np.full((8,), [0.5, 0.5, 0.5, 0.5, 0.5, 2.0, 0.1, 0.1], dtype=np.float32)
+    exploration_std = 5 * np.full((8,), [0.5, 0.5, 0.5, 0.5, 0.5, 2.0, 0.1, 0.1], dtype=np.float32)
 
 
     env = FishGoalEnv(

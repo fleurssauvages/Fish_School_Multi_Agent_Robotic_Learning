@@ -27,7 +27,7 @@ if __name__ == "__main__":
                             [28.0, 16.0, 22.0],
                             [28.0, 24.0, 18.0]], dtype=np.float32)
     t0 = time.time()
-    env = FishGoalEnv(boid_count=boid_count, pred_count=0, max_steps=max_steps, dt=1, doAnimation = False, returnTrajectory = True, obs_centers=obs_centers)
+    env = FishGoalEnv(boid_count=boid_count, pred_count=0, max_steps=max_steps, dt=1, doAnimation = True, returnTrajectory = True, obs_centers=obs_centers)
     env.reset(seed=0)
     t1 = time.time()
     print(f"Fish Warmup Time: {(t1 - t0)*1000.0:.2f} ms")
