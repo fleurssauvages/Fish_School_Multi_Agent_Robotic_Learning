@@ -1240,7 +1240,7 @@ if __name__ == "__main__":
                        0.3, #6: goal attraction gain
                        ], dtype=np.float32)
     
-    load_theta = True
+    load_theta = False
     if load_theta:
         theta_path = "save/best_policy.pkl"
         action = pickle.load(open(theta_path, "rb"))['best_theta']

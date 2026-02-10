@@ -32,11 +32,9 @@ env/
 
 scripts/
 - free_roam.py — Emergent motion without a goal
-- goal_roam.py — Goal-directed collective navigation with tunable actions using sliders
 - train_rl.py — Reinforcement learning over θ to learn the "best" behaviour given a reward
-- train_gmr.py - GMR to predict and extract a behaviour
-- train_gmr_multiple_goals.py - Extended to multiple goals
-- train_gmr_history.py - Extended to multiple goals and moving point using a SpaceMouse 3D Joystick
+- gmr_example.py - A GMR is fitted and update based on the previous path (SpaceMouse control)
+- gmr_with_LMPC_controller.py - The user is additionnally constraint by an LMPC to avoid the obstacles, and a shared controller guides him using the GMR
 
 ---
 
@@ -47,7 +45,7 @@ scripts/
 ### 🔹Free-roam: Fishes don't have any goal besides avoid obstacles and predators
 <img src="images/free_roam.gif" width="600" alt="traj">
 
-### 🔹 Goal-oriented roamn: Fishes try to reach a given goal (gains can be manually tuned)
+### 🔹 Goal-oriented roamn: Fishes try to reach a given goals defined by a weighted graph
 <img src="images/target_roam.gif" width="800" alt="RL">
 
 ### 🔹 Goal-oriented roam after RL-optimization
@@ -55,6 +53,9 @@ scripts/
 
 ### 🔹 GMR Fitting with Multiple Goals
 <img src="images/GMR.gif" width="800" alt="GMR">
+
+### 🔹 Shared Controller
+<img src="images/SharedControl.gif" width="800" alt="GMR">
 
 </div>
 ---
@@ -66,14 +67,10 @@ scripts/
 
 Purely emergent behavior with no explicit goal, driven only by local interactions, similar to Erik Martin Vetemaa implementation, with modified behaviour.
 
-### Goal Roam — Collective Navigation
-
-Adds a global goal while preserving decentralized interactions.
-
 ### Environment & Replay
 RL/env.py
 
-Deterministic replay and visualization of learned θ.
+Deterministic replay and visualization of learned θ, with goals as a graph with weighting probablities.
 
 ### Reinforcement Learning
 train_rl.py
@@ -81,9 +78,15 @@ train_rl.py
 Policy search over θ using probabilistic reinforcement learning using Power RL.
 
 ### GMR Fitting
-train_gmr.py
+gmr_example.py
 
 Fit a GMR regression on fishes trajectories.
+
+### Shared Controller
+gmr_with_LMPC_controller.py
+
+A shared controller ensure safe motion and pull towards GMR model.
+
 
 ---
 
