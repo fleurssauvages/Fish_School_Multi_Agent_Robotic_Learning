@@ -1,4 +1,4 @@
-### Fish School / Boids-Inspired Multi-Agent Simulation and Learning for GMR Modelisation
+### Fish School / Boids-Inspired Simulation and Learning for GMR Modelisation and Shared Autonomy
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![RL](https://img.shields.io/badge/reinforcement--learning-probabilistic-green)](#)
