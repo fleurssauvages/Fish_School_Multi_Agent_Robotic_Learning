@@ -397,8 +397,7 @@ if __name__ == "__main__":
         T_des_human = sm.SE3.Trans(x + v * dt)
         T_des_GMR = sm.SE3.Trans(x + v_ref * dt)
 
-        print(obs_list)
-        Uopt, Xopt, poses = lmpc_solver.solve(T_i, T_des_human, T_des_GMR, 1 - alpha, obstacles=obs_list, traj=traj, margin=0.5)
+        Uopt, Xopt, poses = lmpc_solver.solve(T_i, T_des_human, T_des_GMR, 1 - alpha, obstacles=obs_list, traj=traj, margin=0.01)
         
         if Uopt is None:
             vopt = np.zeros(2)
