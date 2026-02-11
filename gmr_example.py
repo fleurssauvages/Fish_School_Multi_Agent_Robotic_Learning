@@ -12,19 +12,34 @@ from controllers.spacemouse import SpaceMouse3D
 from GMR.utils import select_demos, refresh_wireframes
 
 def compute_terminal_nodes(goal_W, tol=1e-12):
+    """
+    Compute terminal nodes (i.e. nodes with no outgoing edges or only self-loops) in a graph.
+
+    Parameters
+    ----------
+    goal_W : (G, G) array
+        Weight matrix of the graph
+    tol : float, optional
+        Tolerance for considering a weight nonzero. Defaults to 1e-12.
+
+    Returns
+    -------
+    terminal : (G,) array of bool
+        Terminal nodes in the graph
+    """
     G = goal_W.shape[0]
     terminal = np.zeros(G, dtype=bool)
 
+    # iterate over all nodes
     for i in range(G):
         row = goal_W[i]
 
-        # indices with outgoing weight
+        # find indices with outgoing weight
         outgoing = np.where(row > tol)[0]
 
         if len(outgoing) == 0:
             # no outgoing edges
             terminal[i] = True
-
         elif len(outgoing) == 1 and outgoing[0] == i:
             # only self-loop
             terminal[i] = True

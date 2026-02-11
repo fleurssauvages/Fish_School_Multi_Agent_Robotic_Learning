@@ -7,9 +7,6 @@ def normalize_demos_list(pos_demos):
     if isinstance(pos_demos, list):
         return [d if d.shape[0] >= d.shape[1] else d.T for d in pos_demos]
 
-    if pos_demos.ndim != 3:
-        raise ValueError("pos_demos must be list[(T,D)] or array (N,T,D)/(N,D,T)")
-
     if pos_demos.shape[1] < pos_demos.shape[2]:  # (N,T,D)
         return [pos_demos[i] for i in range(pos_demos.shape[0])]
     else:                                        # (N,D,T)

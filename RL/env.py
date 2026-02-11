@@ -1244,8 +1244,6 @@ if __name__ == "__main__":
     if load_theta:
         theta_path = "save/best_policy.pkl"
         action = pickle.load(open(theta_path, "rb"))['best_theta']
-        print("Loaded theta")
-        print(action)
     
     t = []
     for _ in range(10):
