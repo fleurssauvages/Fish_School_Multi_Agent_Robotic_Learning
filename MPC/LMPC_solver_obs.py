@@ -168,7 +168,7 @@ class LinearMPCController:
         self.solution = None
         pass
     
-    def solve(self, ini_pose, des_pose_human, des_pose_auto, w, xi0=None, obstacles=None, traj=None, margin=0.05, culling_dist=10):
+    def solve(self, ini_pose, des_pose_human, des_pose_auto, w, xi0=None, obstacles=None, traj=None, margin=0.05, culling_dist=1):
         """
         Solve finite-horizon linear MPC:
         minimize ||X - X_des||^2 + gamma ||U||^2

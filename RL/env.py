@@ -1098,17 +1098,24 @@ def precompute_mesh_avoidance(verts, faces,
     af = build_avoid_field_from_df(df, power=np.float32(power), alpha=np.float32(alpha))
     return af, df, origin, spacing
 
-def make_torus_mesh(R=10.0,      # major radius
-                       r=3.0,       # tube radius
-                       segR=48,
-                       segr=24,
-                       center=(25.0, 25.0, 25.0)):
+
+def make_torus_mesh(
+        R=10.0,
+        r=3.0,
+        segR=48,
+        segr=24,
+        center=(25.0, 25.0, 25.0),
+        yaw=0.0  # rotation around Z (radians)
+    ):
     """
     Torus whose main ring lies in the YZ plane
-    (i.e., torus wraps around X axis).
+    (wraps around X axis), with optional rotation
+    around global Z axis.
     """
 
     cx, cy, cz = center
+    cyaw = np.cos(yaw)
+    syaw = np.sin(yaw)
 
     verts = []
     faces = []
@@ -1116,22 +1123,29 @@ def make_torus_mesh(R=10.0,      # major radius
     # ---- vertices ----
     for i in range(segR):
         theta = 2.0 * np.pi * i / segR
-
         cos_t = np.cos(theta)
         sin_t = np.sin(theta)
 
         for j in range(segr):
             phi = 2.0 * np.pi * j / segr
-
             cos_p = np.cos(phi)
             sin_p = np.sin(phi)
 
-            # Torus around X-axis
+            # Torus around X-axis (local coords)
             x = r * sin_p
             y = (R + r * cos_p) * cos_t
             z = (R + r * cos_p) * sin_t
 
-            verts.append([cx + x, cy + y, cz + z])
+            # ---- rotate around Z ----
+            x_rot = x * cyaw - y * syaw
+            y_rot = x * syaw + y * cyaw
+            z_rot = z
+
+            verts.append([
+                cx + x_rot,
+                cy + y_rot,
+                cz + z_rot
+            ])
 
     verts = np.array(verts, dtype=np.float32)
 
@@ -1193,6 +1207,30 @@ def make_sphere_mesh(
     faces = np.array(faces, dtype=np.int32)
 
     return verts, faces
+
+def merge_meshes(meshes):
+    """
+    meshes: list of (verts, faces)
+      verts: (Nv,3) float32/float64
+      faces: (Nf,3) int32/int64 indices into verts
+    returns: (V,F) merged
+    """
+    V_all = []
+    F_all = []
+    v_off = 0
+
+    for V, F in meshes:
+        V = np.asarray(V, dtype=np.float32)
+        F = np.asarray(F, dtype=np.int32)
+
+        V_all.append(V)
+        F_all.append(F + v_off)
+
+        v_off += V.shape[0]
+
+    Vm = np.vstack(V_all).astype(np.float32)
+    Fm = np.vstack(F_all).astype(np.int32)
+    return Vm, Fm
 
 if __name__ == "__main__":
     verts, faces = make_torus_mesh(

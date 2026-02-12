@@ -1,74 +1,136 @@
 import numpy as np
+from numba import njit, prange
+import numba
+numba.set_num_threads(8)
 
 # ---------------------------------------
 # History-conditioned demo selection
 # ---------------------------------------
-def reps_closest_to_point(pos_all, target):
+@njit(cache=True, fastmath=True, parallel=True)
+def score_and_reps(pos_all, history_pts, w_min=0.05, w_max=1.0):
     """
-    pos_all: (T,N,3)
-    target: (3,)
-    returns reps: (N,3) representative point per demo
+    pos_all: (T,N,3) float32/float64 contiguous
+    history_pts: (L,3)
+    Returns:
+      score2: (N,) weighted sum of squared min distances (min over time) for each history point
+      reps:   (N,3) representative points closest (over time) to latest history point
     """
-    d = np.linalg.norm(pos_all - target[None, None, :], axis=2)  # (T,N)
-    t_star = d.argmin(axis=0)                                   # (N,)
-    reps = pos_all[t_star, np.arange(pos_all.shape[1]), :]       # (N,3)
-    return reps
-
-def nms_by_rep_points(score, reps, k, min_rep_dist=0.5):
-    """
-    score: (N,) lower is better
-    reps: (N,3) representative points
-    Greedy pick by best score, suppress reps within min_rep_dist
-    """
-    order = np.argsort(score)
-    selected = []
-    suppressed = np.zeros(len(score), dtype=bool)
-
-    for j in order:
-        if suppressed[j]:
-            continue
-        selected.append(j)
-        if len(selected) >= k:
-            break
-        d = np.linalg.norm(reps - reps[j], axis=1)
-        suppressed |= (d < min_rep_dist)
-        suppressed[j] = False  # keep selected
-
-    return np.array(selected, dtype=int)
-
-def select_demos_by_history(pos_all, history_pts, k=10,
-                           w_min=0.05, w_max=1.0):
-    pos_all = np.asarray(pos_all, float)
-    history_pts = np.asarray(history_pts, float)
     T, N, _ = pos_all.shape
     L = history_pts.shape[0]
 
-    # distances (T, N, L)
-    d = np.linalg.norm(pos_all[:, :, None, :] - history_pts[None, None, :, :], axis=3)
+    # weights (linear ramp) + normalize
+    # compute sum of linspace analytically to avoid allocating w
+    # w_ell = w_min + (w_max-w_min)*ell/(L-1)
+    # handle L==1 safely
+    if L <= 1:
+        wsum = 1.0
+    else:
+        # sum of arithmetic sequence
+        wsum = 0.5 * L * (w_min + w_max)
 
-    # per demo: best match over time for each history point -> (N, L)
-    d_min_over_time = d.min(axis=0)
+    score2 = np.empty(N, dtype=pos_all.dtype)
+    reps = np.empty((N, 3), dtype=pos_all.dtype)
 
-    # recency weights (oldest small, newest big)
-    w = np.linspace(w_min, w_max, L)
-    w = w / (w.sum() + 1e-12)
+    for n in prange(N):
+        total = 0.0
 
-    # weighted average distance across ALL history points
-    score = (d_min_over_time * w[None, :]).sum(axis=1)  # (N,)
+        # also track reps for latest point inside same loop
+        best_latest_d2 = 1e30
+        best_latest_t = 0
 
-    latest = history_pts[-1]
-    reps = reps_closest_to_point(pos_all, latest)  # (N,3)
-    idx = nms_by_rep_points(score, reps, k=k, min_rep_dist=0.05)
-    return idx, score[idx]
+        for ell in range(L):
+            hx = history_pts[ell, 0]
+            hy = history_pts[ell, 1]
+            hz = history_pts[ell, 2]
 
-def select_demos(boids_pos, history_pts, n_demos=3, time_stride=10):
-    idx, _ = select_demos_by_history(boids_pos, history_pts, k=n_demos)
+            # min over time for this (n, ell)
+            best_d2 = 1e30
+            for t in range(T):
+                dx = pos_all[t, n, 0] - hx
+                dy = pos_all[t, n, 1] - hy
+                dz = pos_all[t, n, 2] - hz
+                d2 = dx*dx + dy*dy + dz*dz
+                if d2 < best_d2:
+                    best_d2 = d2
+
+                # if this ell is latest, also track best t for reps
+                if ell == L - 1:
+                    if d2 < best_latest_d2:
+                        best_latest_d2 = d2
+                        best_latest_t = t
+
+            # weight for ell
+            if L <= 1:
+                w = 1.0
+            else:
+                w = w_min + (w_max - w_min) * (ell / (L - 1))
+            w = w / (wsum + 1e-12)
+
+            total += w * best_d2
+
+        score2[n] = total
+
+        # reps from best_latest_t
+        reps[n, 0] = pos_all[best_latest_t, n, 0]
+        reps[n, 1] = pos_all[best_latest_t, n, 1]
+        reps[n, 2] = pos_all[best_latest_t, n, 2]
+
+    return score2, reps
+
+@njit(cache=True, fastmath=True)
+def nms_by_rep_points(score, reps, k, min_rep_dist):
+    N = score.shape[0]
+    order = np.argsort(score)
+    suppressed = np.zeros(N, dtype=np.uint8)
+    selected = np.empty(k, dtype=np.int32)
+    nsel = 0
+    thr2 = min_rep_dist * min_rep_dist
+
+    for oi in range(N):
+        j = order[oi]
+        if suppressed[j] == 1:
+            continue
+
+        selected[nsel] = j
+        nsel += 1
+        if nsel >= k:
+            break
+
+        rjx, rjy, rjz = reps[j, 0], reps[j, 1], reps[j, 2]
+        for i in range(N):
+            dx = reps[i, 0] - rjx
+            dy = reps[i, 1] - rjy
+            dz = reps[i, 2] - rjz
+            d2 = dx*dx + dy*dy + dz*dz
+            if d2 < thr2:
+                suppressed[i] = 1
+        suppressed[j] = 0
+
+    return selected[:nsel]
+
+def select_demos_by_history(
+    pos_all, history_pts, k=15,
+    w_min=0.05, w_max=1.0,
+    min_rep_dist=0.05,
+):
+    # use float32 unless you truly need float64
+    pos_all = np.ascontiguousarray(pos_all, dtype=np.float32)
+    history_pts = np.ascontiguousarray(history_pts, dtype=np.float32)
+
+    score2, reps = score_and_reps(pos_all, history_pts, w_min=w_min, w_max=w_max)
+    idx = nms_by_rep_points(score2, reps, k=k, min_rep_dist=np.float32(min_rep_dist))
+    return idx, score2[idx]
+
+def select_demos(boids_pos, history_pts, n_demos=15, time_stride=10, min_rep_dist=0.05):
+    idx, _ = select_demos_by_history(
+        boids_pos, history_pts, k=n_demos, min_rep_dist=min_rep_dist
+    )
+
     pos_demos = []
     for i in idx:
         demo = boids_pos[:, i, :]
-        valid = (np.linalg.norm(demo, axis=1) > 1e-2)
-        demo = demo[valid, :]
-        demo = demo[::time_stride, :]
+        valid = ((demo * demo).sum(axis=1) > 1e-4)  # (norm > 1e-2)^2
+        demo = demo[valid, :][::time_stride, :]
         pos_demos.append(demo)
     return pos_demos
 

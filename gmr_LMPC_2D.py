@@ -322,14 +322,14 @@ if __name__ == "__main__":
 
     # demos
     # demo_lines = [ax.plot([], [], "k--", lw=1.0, alpha=0.5)[0] for _ in range(n_demos)]
-    # def set_demo_lines(demos):
-    #     for i, ln in enumerate(demo_lines):
-    #         if i < len(demos):
-    #             d = demos[i]
-    #             ln.set_data(d[:, 0], d[:, 1])
-    #             ln.set_visible(True)
-    #         else:
-    #             ln.set_visible(False)
+    def set_demo_lines(demos):
+        for i, ln in enumerate(demo_lines):
+            if i < len(demos):
+                d = demos[i]
+                ln.set_data(d[:, 0], d[:, 1])
+                ln.set_visible(True)
+            else:
+                ln.set_visible(False)
     # set_demo_lines(pos_demos)
 
     # mean
@@ -350,7 +350,7 @@ if __name__ == "__main__":
     spm.start()
 
     speed_limit = 10
-    lmpc_solver = LinearMPCController(horizon=10, dt=dt, gamma = 0.05,
+    lmpc_solver = LinearMPCController(horizon=10, dt=dt, gamma = 1,
                                     u_min=np.array([-speed_limit, -speed_limit, -speed_limit, -speed_limit, -speed_limit, -speed_limit]),
                                     u_max=np.array([ speed_limit,  speed_limit,  speed_limit,  speed_limit,  speed_limit,  speed_limit]))
 
@@ -374,8 +374,8 @@ if __name__ == "__main__":
         d = np.linalg.norm(mu_y - x[None, :], axis=1)
         tidx = int(np.argmin(d))
         if tidx < max_steps -lmpc_solver.horizon:
-            v_ref = (mu_y[tidx + 1] - mu_y[tidx]) / dt
-            p0 = mu_y[tidx]
+            v_ref = (mu_y[tidx + 1] - x) / dt
+            p0 = x
             p1 = mu_y[tidx + lmpc_solver.horizon]
             p0 = np.array([p0[0], p0[1], 0.0])
             p1 = np.array([p1[0], p1[1], 0.0])
